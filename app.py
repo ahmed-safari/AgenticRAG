@@ -3,10 +3,8 @@ import numpy as np
 import faiss
 import os
 import pickle
-import re
 import time
 from mistralai import Mistral, UserMessage
-from urllib.parse import urlparse
 import dotenv
 
 # Load environment variables
