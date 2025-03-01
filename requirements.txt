@@ -4,3 +4,4 @@ beautifulsoup4
 numpy
 faiss-cpu
 mistralai
+dotenv
