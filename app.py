@@ -3,8 +3,6 @@ import numpy as np
 import faiss
 import os
 import pickle
-import requests
-from bs4 import BeautifulSoup
 import re
 import time
 from mistralai import Mistral, UserMessage
@@ -22,16 +20,72 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Custom CSS for a modern look
+# Custom CSS for a modern responsive look with dark mode completely disabled
 st.markdown("""
 <style>
+    /* Force light mode for all elements */
+    [data-testid="stAppViewContainer"], 
+    [data-testid="stSidebar"],
+    .stTextInput label, 
+    .stCheckbox label,
+    .stTextInput input,
+    .stSelectbox label,
+    .stSelectbox select,
+    .stMarkdown,
+    .st-emotion-cache-16txtl3,
+    .stButton button,
+    [data-testid="stChatInput"],
+    [data-testid="stChatMessageContent"],
+    [data-testid="stExpanderHeader"],
+    [data-testid="stExpanderContent"],
+    [data-testid="baseButton-secondary"],
+    div[data-baseweb="select"],
+    div[role="listbox"] {
+        background-color: #ffffff !important;
+        color: #31333F !important;
+    }
+    
+    /* Force light mode for chat messages */
+    [data-testid="stChatMessage"] {
+        background-color: #f8f9fa !important;
+    }
+    
+    /* Assistant message background */
+    [data-testid="stChatMessage"][data-testid="assistant"] {
+        background-color: #eef2ff !important;
+    }
+    
+    /* Input fields */
+    input, textarea, select, button {
+        background-color: #ffffff !important;
+        color: #31333F !important;
+        border: 1px solid #dfe1e5 !important;
+    }
+    
+    /* Disable dark mode toggle and settings */
+    [data-testid="SettingsIcon"], 
+    header[data-testid="stHeader"] {
+        display: none !important;
+    }
+    
+    /* Responsive layout */
     .main {
-        background-color: #f8f9fa;
+        background-color: #f8f9fa !important;
     }
     .stApp {
-        max-width: 1200px;
+        max-width: 100%;
         margin: 0 auto;
+        display: flex;
+        flex-direction: column;
+        min-height: 100vh;
     }
+    
+    /* Make the main content area flexible to push footer down */
+    section[data-testid="stSidebarContent"] {
+        background-color: #ffffff !important;
+    }
+    
+    /* Typography */
     .st-emotion-cache-16txtl3 h1 {
         font-weight: 700;
         color: #1e3a8a;
@@ -44,6 +98,8 @@ st.markdown("""
         font-weight: 500;
         color: #1e3a8a;
     }
+    
+    /* Card styling */
     .css-card {
         border-radius: 10px;
         padding: 20px;
@@ -51,6 +107,8 @@ st.markdown("""
         box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
         margin-bottom: 20px;
     }
+    
+    /* Source box */
     .sources-box {
         background-color: #f0f4f8;
         padding: 15px;
@@ -58,17 +116,8 @@ st.markdown("""
         margin-top: 10px;
         border-left: 3px solid #4b6cb7;
     }
-    .footer {
-        position: fixed;
-        left: 0;
-        bottom: 0;
-        width: 100%;
-        background-color: white;
-        color: #666;
-        text-align: center;
-        padding: 10px;
-        box-shadow: 0 -2px 5px rgba(0,0,0,0.1);
-    }
+    
+    /* Context box */
     .context-box {
         background-color: #f0f4f8;
         padding: 15px;
@@ -77,6 +126,31 @@ st.markdown("""
         max-height: 300px;
         overflow-y: auto;
         border-left: 3px solid #3b82f6;
+    }
+    
+    /* Footer with fixed positioning */
+    .footer {
+        width: 100%;
+        background-color: white !important;
+        color: #666 !important;
+        text-align: center;
+        padding: 15px 0;
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        z-index: 1000;
+        margin-top: 20px;
+
+    }
+    
+    /* Media queries for responsive design */
+    @media (max-width: 768px) {
+        .css-card {
+            padding: 15px;
+        }
+        .context-box {
+            max-height: 200px;
+        }
     }
 </style>
 """, unsafe_allow_html=True)
@@ -95,44 +169,6 @@ if 'chat_history' not in st.session_state:
 if 'show_context' not in st.session_state:
     st.session_state.show_context = False
 
-def get_content_from_url(url):
-    """
-    Fetch content from a given URL and extract the main text.
-    """
-    try:
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
-        }
-        response = requests.get(url, headers=headers, timeout=10)
-        response.raise_for_status()
-        
-        html_doc = response.text
-        soup = BeautifulSoup(html_doc, "html.parser")
-        
-        # Remove script and style elements
-        for script in soup(["script", "style", "header", "footer", "nav"]):
-            script.extract()
-        
-        # Extract text from main content areas
-        main_content = soup.find("main") or soup.find("article") or soup.find("div", class_="content") or soup.find("body")
-        
-        if main_content:
-            text = main_content.get_text(separator='\n', strip=True)
-        else:
-            text = soup.get_text(separator='\n', strip=True)
-        
-        # Clean up the text
-        text = re.sub(r'\n+', '\n', text)  # Replace multiple newlines with a single one
-        text = re.sub(r'\s+', ' ', text)   # Replace multiple spaces with a single one
-        
-        domain = urlparse(url).netloc
-        source_info = f"Source: {domain} - {url}"
-        
-        return text, source_info
-    except Exception as e:
-        st.error(f"Error fetching content from {url}: {e}")
-        return None, None
-
 def get_text_embedding(list_txt_chunks, batch_size=10):
     """
     Get embeddings for text chunks, with batching to avoid rate limits
@@ -147,8 +183,7 @@ def get_text_embedding(list_txt_chunks, batch_size=10):
             with st.spinner(f"Getting embeddings for batch {i//batch_size + 1}/{(len(list_txt_chunks)//batch_size) + 1}..."):
                 embeddings_batch_response = client.embeddings.create(model="mistral-embed", inputs=batch)
                 all_embeddings.extend(embeddings_batch_response.data)
-                # Add a small delay to avoid hitting rate limits
-                time.sleep(0.5)  
+                time.sleep(0.5)  # Small delay to avoid rate limits
         except Exception as e:
             st.error(f"Error getting embeddings for batch {i}:{i+batch_size}: {e}")
             # Add empty embeddings as placeholders
@@ -156,32 +191,6 @@ def get_text_embedding(list_txt_chunks, batch_size=10):
                 all_embeddings.append(None)
     
     return all_embeddings
-
-def chunk_text(all_texts, all_sources, chunk_size=512, overlap=100):
-    """
-    Split the text into overlapping chunks to maintain context across chunks.
-    """
-    chunks = []
-    chunk_sources = []
-    
-    for i, doc_text in enumerate(all_texts):
-        # Ensure the document has enough content to be worthwhile
-        if len(doc_text) < 50:
-            continue
-            
-        # Create overlapping chunks
-        doc_chunks = []
-        start = 0
-        while start < len(doc_text):
-            end = min(start + chunk_size, len(doc_text))
-            doc_chunks.append(doc_text[start:end])
-            start += chunk_size - overlap
-            
-        chunks.extend(doc_chunks)
-        chunk_sources.extend([all_sources[i]] * len(doc_chunks))
-    
-    return chunks, chunk_sources
-
 
 def load_existing_index():
     """Load pre-existing FAISS index and data"""
@@ -248,7 +257,7 @@ def rag_query(question, k=3):
     Question: {question}
     
     Please provide a comprehensive answer based solely on the context information provided.
-    Include references to the policy used to get that answer.
+    Include references to the policy used to get that answer formatted like this: Policy: Name - (Policy URL). Don't mention the chunk numbers.
     """
     print(prompt)
     # Generate response using Mistral
@@ -268,7 +277,7 @@ def rag_query(question, k=3):
 
 def display_sidebar():
     with st.sidebar:
-        st.image("https://www.udst.edu.qa/themes/custom/cnaq/logo.png", width=200, use_column_width=True)
+        st.image("https://www.udst.edu.qa/themes/custom/cnaq/logo.png", width=200)
         st.title("📚 Config")
         
         # API Key input
@@ -276,18 +285,23 @@ def display_sidebar():
         if api_key != st.session_state.api_key:
             st.session_state.api_key = api_key
         
-        
         st.divider()
         
         # Knowledge sources
         st.subheader("Knowledge Sources")
 
-        # List of sources with URLs and descriptions
+     # List of sources with URLs and descriptions
         sources = [
             ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/sport-and-wellness-facilities-and", "🏋️ Sport and Wellness"),
             ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/student-attendance-policy", "📅 Attendance"),
             ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/final-grade-policy", "📝 Final Grade"),
-            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/student-conduct-policy", "👨‍🎓 Student Conduct")
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/student-conduct-policy", "👨‍🎓 Student Conduct"),
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/udst-policies-and-procedures/academic-schedule-policy", "📆 Academic Schedule"),
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/student-appeals-policy", "⚖️ Student Appeals"),
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/transfer-policy", "🔄 Transfer Policy"),
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/admissions-policy", "🎓 Admissions"),
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/policies-and-procedures/registration-policy", "📝 Registration"),
+            ("https://www.udst.edu.qa/about-udst/institutional-excellence-ie/udst-policies-and-procedures/graduation-policy", "🎉 Graduation Policy")
         ]
 
         # Display each source as a clickable link with an emoji
@@ -296,7 +310,6 @@ def display_sidebar():
 
         st.divider()
         
-   
         # Add clear button
         if st.button("🗑️ Clear Chat History", use_container_width=True):
             st.session_state.chat_history = []
@@ -306,19 +319,23 @@ def main():
     display_sidebar()
     load_existing_index()
     
-    # Main content area
-    st.title("🧠 RAG Knowledge Assistant")
-    st.markdown("""
-    <div class="css-card">
-        <h3>Welcome to the RAG Knowledge Assistant! 👋</h3>
-        <p>This app uses Retrieval Augmented Generation (RAG) to answer questions based on your own knowledge sources.</p>
-        <p>To get started:</p>
-        <ol>
-            <li>Add your Mistral API key in the sidebar</li>
-            <li>Ask questions below!</li>
-        </ol>
-    </div>
-    """, unsafe_allow_html=True)
+    # Container for proper spacing
+    main_container = st.container()
+    
+    with main_container:
+        # Main content area
+        st.markdown("""
+        <div class="css-card">
+            <h1>🧠 RAG Knowledge Assistant</h1>
+            <h3>Welcome to the RAG Knowledge Assistant! 👋</h3>
+            <p>This app uses Retrieval Augmented Generation (RAG) to answer questions based on your own knowledge sources.</p>
+            <p>To get started:</p>
+            <ol>
+                <li>Add your Mistral API key in the sidebar</li>
+                <li>Ask questions below!</li>
+            </ol>
+        </div>
+        """, unsafe_allow_html=True)
     
     # Display chat messages
     for message in st.session_state.chat_history:
@@ -331,7 +348,7 @@ def main():
                     st.markdown(f"<div class='context-box'>{message['context']}</div>", unsafe_allow_html=True)
     
     # Input for user question
-    user_question = st.chat_input("Ask a question about your documents...")
+    user_question = st.chat_input("Ask a question about university policies...")
     
     if user_question:
         # Add user message to chat history
@@ -369,10 +386,13 @@ def main():
             "sources": sources
         })
     
-    # Footer
+    # Create a spacer before the footer to ensure content isn't hidden behind fixed footer
+    st.markdown("<div style='margin-bottom:100px;'></div>", unsafe_allow_html=True)
+    
+    # Footer that stays at the bottom
     st.markdown("""
     <div class="footer">
-        Made with <span style="color: #e25555;">❤️</span> by Ahmed | 
+        Made with <span style="color: #e25555;">♥️</span> by Ahmed - 60101938 | 
         <a href="https://github.com/yourusername/rag-assistant" target="_blank">
             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <path d="M9 19c-5 1.5-5-2.5-7-3m14 6v-3.87a3.37 3.37 0 0 0-.94-2.61c3.14-.35 6.44-1.54 6.44-7A5.44 5.44 0 0 0 20 4.77 5.07 5.07 0 0 0 19.91 1S18.73.65 16 2.48a13.38 13.38 0 0 0-7 0C6.27.65 5.09 1 5.09 1A5.07 5.07 0 0 0 5 4.77a5.44 5.44 0 0 0-1.5 3.78c0 5.42 3.3 6.61 6.44 7A3.37 3.37 0 0 0 9 18.13V22"></path>
